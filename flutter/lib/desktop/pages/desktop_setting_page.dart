@@ -1951,9 +1951,66 @@ class _DisplayState extends State<_Display> {
       imageQuality(context),
       codec(context),
       if (isDesktop) trackpadSpeed(context),
+      if (isDesktop) reconnectAfterDrop(context), // ( 2026-11-18 )
       if (!isWeb) privacyModeImpl(context),
       other(context),
     ]).marginOnly(bottom: _kListViewBottomMargin);
+  }
+
+  // ( 2026-11-18 ) 사무실용 수정: 연결됐던 원격이 끊긴 뒤(병원 PC 재부팅 등) 자동 재접속 간격·시간
+  //   값은 내 PC 설정(RustDesk_local.toml)에 저장, 사용하는 곳은 models/model.dart _longRetryDelay
+  Widget reconnectAfterDrop(BuildContext context) {
+    const intervals = ['3', '5', '10', '15', '20', '30', '60'];
+    const minutesList = ['0', '1', '3', '5', '10', '15', '20', '30', '60'];
+    String current(String key, int def, List<String> list) {
+      final v = (int.tryParse(bind.mainGetLocalOption(key: key)) ?? def)
+          .toString();
+      return list.contains(v) ? v : def.toString();
+    }
+
+    Widget row(String label, Widget combo) => Row(children: [
+          SizedBox(
+              width: 60,
+              child: Text(label,
+                  style: const TextStyle(fontSize: _kContentFontSize))),
+          Expanded(child: combo),
+        ]).marginOnly(left: _kContentHMargin);
+
+    return _Card(title: '끊긴 뒤 자동 재접속', children: [
+      Text('원격 중에 상대 PC가 다시 시작되거나 연결이 끊기면, 정한 시간 동안 정한 간격으로 계속 다시 연결합니다.',
+              style: TextStyle(
+                  fontSize: _kContentFontSize,
+                  color: disabledTextColor(context, false)))
+          .marginOnly(left: _kContentHMargin),
+      row(
+          '간격',
+          ComboBox(
+            keys: intervals,
+            values: intervals.map((e) => '$e초마다').toList(),
+            initialKey: current(kOptionCustomReconnectInterval,
+                kDefaultCustomReconnectInterval, intervals),
+            onChanged: (key) async {
+              await bind.mainSetLocalOption(
+                  key: kOptionCustomReconnectInterval, value: key);
+              setState(() {});
+            },
+          )),
+      row(
+          '시간',
+          ComboBox(
+            keys: minutesList,
+            values: minutesList
+                .map((e) => e == '0' ? '끔 (원래 방식)' : '$e분 동안')
+                .toList(),
+            initialKey: current(kOptionCustomReconnectMinutes,
+                kDefaultCustomReconnectMinutes, minutesList),
+            onChanged: (key) async {
+              await bind.mainSetLocalOption(
+                  key: kOptionCustomReconnectMinutes, value: key);
+              setState(() {});
+            },
+          )),
+    ]);
   }
 
   Widget viewStyle(BuildContext context) {

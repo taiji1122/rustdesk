@@ -719,3 +719,10 @@ extension WindowsTargetExt on int {
 }
 
 const kCheckSoftwareUpdateFinish = 'check_software_update_finish';
+
+// ( 2026-11-18 ) 사무실용 수정: 연결됐던 원격이 끊긴 뒤 재접속 설정 (내 PC 설정, RustDesk_local.toml)
+//   간격(초)과 시간(분, 0이면 끔). 설정 → 디스플레이 → "끊긴 뒤 자동 재접속"에서 바꿈
+const kOptionCustomReconnectInterval = 'custom-reconnect-interval';
+const kOptionCustomReconnectMinutes = 'custom-reconnect-minutes';
+const kDefaultCustomReconnectInterval = 5;
+const kDefaultCustomReconnectMinutes = 10;

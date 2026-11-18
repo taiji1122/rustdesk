@@ -1,3 +1,7 @@
+// 수정 내역 (사무실용 빌드)
+//  ( 2026-11-18 ) 연결됐던 원격이 끊기면(병원 PC 재부팅 등) 정해진 간격으로 정해진 시간 동안 다시 연결.
+//    간격·시간은 설정 → 디스플레이 → "끊긴 뒤 자동 재접속"에서 바꿈 (기본 5초, 10분)
+//    _longRetryDelay / handleMsgBox / showMsgBox / 연결 성공 시 초기화 부분 참고
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
@@ -121,6 +125,9 @@ class FfiModel with ChangeNotifier {
   Timer? _restartReconnectDelayTimer;
   var _reconnects = 1;
   DateTime? _offlineReconnectStartTime;
+  // ( 2026-11-18 ) 끊긴 뒤 재접속: 시작 시각, 이번 대기 간격(초, 0이면 원래 방식)
+  DateTime? _longRetryStartTime;
+  int _longRetryInterval = 0;
   bool _androidDocumentPickerActive = false;
   bool _androidDocumentPickerInterruptedConnection = false;
   bool _viewOnly = false;
@@ -957,16 +964,66 @@ class FfiModel with ChangeNotifier {
     } else if (text == kMsgboxTextWaitingForImage) {
       showConnectedWaitingForImage(dialogManager, sessionId, type, title, text);
     } else if (title == 'Privacy mode') {
+      _longRetryInterval = 0; // ( 2026-11-18 )
       final hasRetry = evt['hasRetry'] == 'true';
       showPrivacyFailedDialog(
           sessionId, type, title, text, link, hasRetry, dialogManager);
     } else {
       var hasRetry = evt['hasRetry'] == 'true';
+      // ( 2026-11-18 ) 연결됐던 원격이 끊긴 경우: 원래는 재시도하지 않는 오류
+      // ("Remote desktop is offline", "Failed to connect ..." 등)도 설정한 시간 동안 일정 간격으로 재시도
+      _longRetryInterval = _longRetryDelay(type, title, text);
+      if (_longRetryInterval > 0) {
+        hasRetry = true;
+      }
       if (!hasRetry) {
         hasRetry = shouldAutoRetryOnOffline(type, title, text);
       }
       showMsgBox(sessionId, type, title, text, link, hasRetry, dialogManager);
     }
+  }
+
+  /// ( 2026-11-18 ) 끊긴 뒤 재접속 간격(초)을 돌려줌. 0이면 이 기능을 쓰지 않음(원래 방식).
+  /// - 한 번 연결됐던 세션(_pi.isSet)의 "Connection Error"만 해당
+  /// - 병원이 직접 끊음(manually), 접속 거부(not allowed) 등 의도적으로 끊긴 경우는 제외
+  /// - 간격(초)·시간(분, 0이면 끔)은 설정 → 디스플레이 → "끊긴 뒤 자동 재접속"
+  ///   끊길 때마다 다시 읽으므로 바꾼 뒤 RustDesk를 다시 켤 필요 없음
+  int _longRetryDelay(String type, String title, String text) {
+    if (type != 'error' || title != 'Connection Error' || !_pi.isSet.isTrue) {
+      return 0;
+    }
+    final t = text.toLowerCase();
+    for (final s in const [
+      'manually',
+      'not allowed',
+      'restricted',
+      'incoming only',
+      'mismatch',
+      'not exist',
+    ]) {
+      if (t.contains(s)) return 0;
+    }
+    final interval = max(
+        1,
+        min(
+            300,
+            int.tryParse(bind.mainGetLocalOption(
+                    key: kOptionCustomReconnectInterval)) ??
+                kDefaultCustomReconnectInterval));
+    final minutes = max(
+        0,
+        min(
+            1440,
+            int.tryParse(bind.mainGetLocalOption(
+                    key: kOptionCustomReconnectMinutes)) ??
+                kDefaultCustomReconnectMinutes));
+    if (minutes == 0) return 0;
+    _longRetryStartTime ??= DateTime.now();
+    if (DateTime.now().difference(_longRetryStartTime!).inSeconds >=
+        minutes * 60) {
+      return 0;
+    }
+    return interval;
   }
 
   void resetRestartReconnectState() {
@@ -1081,18 +1138,26 @@ class FfiModel with ChangeNotifier {
       msgBox(sessionId, type, title, text, link, dialogManager,
           hasCancel: hasCancel,
           reconnect: hasRetry ? reconnect : null,
-          reconnectTimeout: hasRetry ? _reconnects : null,
+          // ( 2026-11-18 ) 끊긴 뒤 재접속 중이면 설정한 간격으로 카운트다운
+          reconnectTimeout: hasRetry
+              ? (_longRetryInterval > 0 ? _longRetryInterval : _reconnects)
+              : null,
           onSubmit: onSubmit);
     }
     _timer?.cancel();
     if (hasRetry) {
-      _timer = Timer(Duration(seconds: _reconnects), () {
+      // ( 2026-11-18 ) 끊긴 뒤 재접속 중이면 고정 간격, 아니면 원래대로 1·2·4·8…초
+      final delay = _longRetryInterval > 0 ? _longRetryInterval : _reconnects;
+      _timer = Timer(Duration(seconds: delay), () {
         reconnect(dialogManager, sessionId, false);
       });
-      _reconnects *= 2;
+      if (_longRetryInterval == 0) {
+        _reconnects *= 2;
+      }
     } else {
       _reconnects = 1;
       _offlineReconnectStartTime = null;
+      _longRetryStartTime = null; // ( 2026-11-18 )
     }
   }
 
@@ -1447,6 +1512,8 @@ class FfiModel with ChangeNotifier {
       if (displays.isNotEmpty) {
         _reconnects = 1;
         _offlineReconnectStartTime = null;
+        _longRetryStartTime = null; // ( 2026-11-18 ) 다시 연결되면 재접속 시간 초기화
+        _longRetryInterval = 0;
         resetRestartReconnectState();
         waitForFirstImage.value = true;
         isRefreshing = false;
